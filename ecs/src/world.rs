@@ -48,7 +48,7 @@ impl World {
 
         let archetype = self.archetypes.get_mut(&type_ids).unwrap();
         //whatever the hell this is
-        archetype.add(entity, (&data as *const T) as *mut u8);
+        unsafe { archetype.add(entity, (&data as *const T) as *mut u8) };
     }
 
     pub fn remove<T>(&mut self, entity: Entity) -> T
