@@ -1,12 +1,12 @@
 [package]
-name = "rusty-ecs"
+name = "perplecs"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ecs = { path = "ecs"}
+perplecs-ecs = { path = "ecs"}
 
 [workspace]
 members = [
