@@ -54,28 +54,55 @@ impl Archetype {
         return self.entities.len();
     }
 
-    pub unsafe fn add(&mut self, entity: Entity, data: *mut u8) -> () {
+    pub unsafe fn add(&mut self, entity: Entity, data: &[*mut u8]) -> () {
         if self.entities.len() == self.capacity {
             self.grow(self.capacity * 2);
         }
 
-        let mut offset = 0;
-        for (i, ty) in self.type_ids.iter().enumerate() {
+        for (i, (ty, data)) in self.type_ids.iter().zip(data.iter()).enumerate() {
             let ty = &self.types[ty];
-            let ptr = data.byte_add(offset);
-            self.data[i].set(ty, self.len(), ptr);
-            dbg!(ty.layout.size());
-            dbg!(ty.layout.align());
-            offset += ty.layout.size();
+            self.data[i].set(ty, self.len(), *data);
         }
 
         self.entities.push(entity);
         // pushing after the data adding otherwise we would get a off by plus one
     }
 
-    pub fn remove(&mut self, entity: Entity) -> () {
-        //TODO: handle case where there isn't a entity in it
-        let index = self.entities.binary_search(&entity).unwrap();
+    pub fn remove(&mut self, entity: Entity, type_id: TypeId) -> Option<Box<[TypeInfo]>> {
+        //TODO: return the unused components
+        let index = self.entities.binary_search(&entity);
+        if index.is_err() {
+            return None;
+        }
+
+        let index = index.unwrap();
+
+        self.entities.remove(index);
+        //remove the all the components
+        for (data, ty) in self.data.iter().zip(self.type_ids.iter()) {
+            if *ty != type_id {
+                continue;
+            }
+
+            let ty = self.types[ty];
+            unsafe {
+                let removed = data.get(&ty, index);
+                (ty.drop)(removed);
+                let last = self.capacity - 1;
+                let moved = data.get(&ty, last as usize);
+                ptr::copy_nonoverlapping(moved, removed, ty.layout.size());
+            }
+        }
+
+        todo!();
+    }
+
+    pub fn destroy(&mut self, entity: Entity) -> () {
+        let index = self.entities.binary_search(&entity).ok();
+        if index.is_none() {
+            return;
+        }
+        let index = index.unwrap();
         self.entities.remove(index);
         //remove the all the components
         for (data, ty) in self.data.iter().zip(self.type_ids.iter()) {
@@ -251,7 +278,7 @@ impl ArchetypeSet {
 #[cfg(test)]
 mod tests {
     use super::{Archetype, ComponentData, TypeInfo};
-    use crate::entity::Entity;
+    use crate::{bundle::Bundle, entity::Entity};
     use std::{any::TypeId, assert_eq};
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -281,35 +308,61 @@ mod tests {
 
     #[test]
     fn archetype_add() {
-        //TODO: inspect this weird behaviour
         let type_ids = [
+            TypeId::of::<u32>(),
             TypeId::of::<u64>(),
             TypeId::of::<TestComponent>(),
-            TypeId::of::<u32>(),
         ];
         let type_infos = [
+            TypeInfo::new::<u32>(),
             TypeInfo::new::<u64>(),
             TypeInfo::new::<TestComponent>(),
-            TypeInfo::new::<u32>(),
         ];
         let mut archetype = Archetype::new(&type_ids, &type_infos);
 
-        let test_data = (2u64, TestComponent { a: 1, b: 346 }, 3u32);
+        let mut test_data = (3u32, 2u64, TestComponent { a: 1, b: 346 });
         let entity = Entity(3);
 
-        unsafe { archetype.add(entity, &(test_data) as *const _ as *mut u8) };
-        let t_u64 = unsafe { *(archetype.data[0].get(&type_infos[0], 0) as *mut u64) };
-        let test_component =
-            unsafe { *(archetype.data[1].get(&type_infos[1], 0) as *mut TestComponent) };
-        let t_u32 = unsafe { *(archetype.data[2].get(&type_infos[2], 0) as *mut u32) };
+        //unsafe { archetype.add(entity, &test_data as *const _ as *mut u8) };
+        unsafe { archetype.add(entity, &test_data.as_ptrs()) };
 
-        assert_eq!(test_data.0, t_u64);
-        assert_eq!(test_data.1, test_component);
-        assert_eq!(test_data.2, t_u32);
+        let t_u32 = unsafe { *(archetype.data[0].get(&type_infos[0], 0) as *mut u32) };
+        let t_u64 = unsafe { *(archetype.data[1].get(&type_infos[1], 0) as *mut u64) };
+        let test_component =
+            unsafe { *(archetype.data[2].get(&type_infos[2], 0) as *mut TestComponent) };
+
+        dbg!(t_u32);
+        dbg!(t_u64);
+        dbg!(test_component);
+
+        assert_eq!(test_data.0, t_u32);
+        assert_eq!(test_data.1, t_u64);
+        assert_eq!(test_data.2, test_component);
+        assert!(archetype.entities.contains(&entity));
     }
 
     #[test]
-    fn archetype_remove() {}
+    fn archetype_remove() {
+        let type_ids = [
+            TypeId::of::<u32>(),
+            TypeId::of::<u64>(),
+            TypeId::of::<TestComponent>(),
+        ];
+        let type_infos = [
+            TypeInfo::new::<u32>(),
+            TypeInfo::new::<u64>(),
+            TypeInfo::new::<TestComponent>(),
+        ];
+        let mut archetype = Archetype::new(&type_ids, &type_infos);
+
+        let mut test_data = (3u32, 2u64, TestComponent { a: 1, b: 346 });
+        let entity = Entity(3);
+
+        //unsafe { archetype.add(entity, &test_data as *const _ as *mut u8) };
+        unsafe { archetype.add(entity, &test_data.as_ptrs()) };
+
+        archetype.remove(entity, type_ids[0]);
+    }
 
     #[test]
     fn archetype_get() {}
@@ -362,6 +415,30 @@ mod tests {
         let ptr = unsafe { data.get(&type_info, 0) as *mut TestComponent };
         let ptr = unsafe { &*ptr };
         let ptr2 = unsafe { data.get(&type_info, 1) as *mut TestComponent };
+        let ptr2 = unsafe { &*ptr2 };
+
+        assert_eq!(test_component, *ptr);
+        assert_eq!(test_component2, *ptr2);
+    }
+
+    #[test]
+    fn component_data_with_small_types() {
+        let type_info = TypeInfo::new::<u32>();
+        let layout = type_info.layout;
+        let mut data = unsafe { ComponentData::new(layout) };
+        let length = 2;
+        let new_size = layout.size() * length;
+        unsafe { data.grow(&layout, new_size) };
+        let test_component = 125u32;
+        let ptr = &test_component as *const _ as *mut u8;
+        unsafe { data.set(&type_info, 0, ptr) };
+        let test_component2 = 321u32;
+        let ptr2 = &test_component2 as *const _ as *mut u8;
+        unsafe { data.set(&type_info, 1, ptr2) };
+
+        let ptr = unsafe { data.get(&type_info, 0) as *mut u32 };
+        let ptr = unsafe { &*ptr };
+        let ptr2 = unsafe { data.get(&type_info, 1) as *mut u32 };
         let ptr2 = unsafe { &*ptr2 };
 
         assert_eq!(test_component, *ptr);
