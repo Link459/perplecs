@@ -1,51 +1,81 @@
-use std::any::TypeId;
+use std::{any::TypeId, marker::PhantomData};
 
 use crate::{archetype::Archetype, bundle::Bundle, entity::Entity};
 
-pub struct Query<'a> {
+pub struct Query<'a, T>
+where
+    T: Bundle,
+{
     archetype: &'a Archetype,
     current_index: usize,
+    _phantom_data: PhantomData<T>,
 }
 
-impl<'a> Query<'a> {
+impl<'a, T> Query<'a, T>
+where
+    T: Bundle,
+{
     pub fn new(archetype: &'a Archetype) -> Self {
         Self {
             archetype,
             current_index: 0,
+            _phantom_data: PhantomData::default(),
         }
-    }
-
-    pub fn get<T>(&self) -> Option<&T>
-    where
-        T: Bundle,
-    {
-        let id = TypeId::of::<T>();
-        if self.current_index >= self.archetype.len() {
-            return None;
-        }
-
-        if !self.archetype.type_ids.contains(&id) {
-            return None;
-        }
-
-        let ty_index = self.archetype.type_ids.binary_search(&id).ok()?;
-        let data = unsafe {
-            self.archetype.data[ty_index].get(&self.archetype.types[&id], self.current_index)
-        };
-
-        return Some(unsafe { &*data.cast::<T>() });
     }
 }
 
-impl<'a> Iterator for Query<'a> {
-    type Item = Entity;
+impl<'a, T> Iterator for Query<'a, T>
+where
+    T: Bundle,
+{
+    type Item = &'a T;
     fn next(&mut self) -> Option<Self::Item> {
         if self.current_index >= self.archetype.len() {
             return None;
         }
 
-        let ret = self.archetype.entities[self.current_index];
+        /*let ret = self.archetype.
         self.current_index += 1;
-        return Some(ret);
+        return Some(ret);*/
+        None
+    }
+}
+
+pub struct QueryMut<'a, T>
+where
+    T: Bundle,
+{
+    archetype: &'a Archetype,
+    current_index: usize,
+    _phantom_data: PhantomData<T>,
+}
+
+impl<'a, T> QueryMut<'a, T>
+where
+    T: Bundle,
+{
+    pub fn new(archetype: &'a Archetype) -> Self {
+        Self {
+            archetype,
+            current_index: 0,
+            _phantom_data: PhantomData::default(),
+        }
+    }
+}
+
+impl<'a, T> Iterator for QueryMut<'a, T>
+where
+    T: Bundle,
+{
+    type Item = &'a mut T;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_index >= self.archetype.len() {
+            return None;
+        }
+
+        /*let ret = self.archetype.
+        self.current_index += 1;
+        return Some(ret);*/
+        None
     }
 }

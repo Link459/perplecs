@@ -64,7 +64,7 @@ impl World {
             .filter(|x| x.has(entity))
             .nth(0)
             .unwrap();
-        let removed = unsafe { archetype.remove(entity, &T::type_ids()) };
+            let removed = archetype.remove(entity, *T::type_ids());
         todo!()
     }
 

@@ -68,7 +68,7 @@ impl Archetype {
         // pushing after the data adding otherwise we would get a off by plus one
     }
 
-    pub fn remove(&mut self, entity: Entity, type_id: TypeId) -> Option<Box<[TypeInfo]>> {
+    pub unsafe fn remove(&mut self, entity: Entity, type_id: &[TypeId]) -> Option<Box<[*mut u8]>> {
         //TODO: return the unused components
         let index = self.entities.binary_search(&entity);
         if index.is_err() {
@@ -79,22 +79,22 @@ impl Archetype {
 
         self.entities.remove(index);
         //remove the all the components
-        for (data, ty) in self.data.iter().zip(self.type_ids.iter()) {
-            if *ty != type_id {
+        let mut ret = Vec::new();
+        for (data, ty_id) in self.data.iter().zip(self.type_ids.iter()) {
+            let ty = self.types[ty_id];
+            let last = self.capacity - 1;
+            let moved = data.get(&ty, last as usize);
+            if !type_id.contains(ty_id) {
+                unsafe {
+                    let removed = data.get(&ty, index);
+                    (ty.drop)(removed);
+                    ptr::copy_nonoverlapping(moved, removed, ty.layout.size());
+                }
                 continue;
             }
-
-            let ty = self.types[ty];
-            unsafe {
-                let removed = data.get(&ty, index);
-                (ty.drop)(removed);
-                let last = self.capacity - 1;
-                let moved = data.get(&ty, last as usize);
-                ptr::copy_nonoverlapping(moved, removed, ty.layout.size());
-            }
+            ret.push(data.get(&ty, index));
         }
-
-        todo!();
+        return Some(ret.into_boxed_slice());
     }
 
     pub fn destroy(&mut self, entity: Entity) -> () {
@@ -117,6 +117,10 @@ impl Archetype {
         }
     }
 
+    pub fn has(&self, entity: Entity) -> bool {
+        return self.entities.contains(&entity);
+    }
+
     pub fn get(&self, entity: Entity, type_id: &TypeId) -> Option<NonNull<u8>> {
         let index = self.entities.binary_search(&entity).ok()?;
         let ty_index = self.type_ids.binary_search(type_id).ok()?;
@@ -126,7 +130,7 @@ impl Archetype {
         };
     }
 
-    pub fn get_by_index(
+    pub unsafe fn get_by_index(
         &self,
         type_id: &TypeId,
         ty_index: usize,
@@ -361,7 +365,7 @@ mod tests {
         //unsafe { archetype.add(entity, &test_data as *const _ as *mut u8) };
         unsafe { archetype.add(entity, &test_data.as_ptrs()) };
 
-        archetype.remove(entity, type_ids[0]);
+        let rest = unsafe { archetype.remove(entity, &[type_ids[0]]) };
     }
 
     #[test]
