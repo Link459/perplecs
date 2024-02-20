@@ -1,10 +1,9 @@
-use std::{any::TypeId, marker::PhantomData};
-
-use crate::{archetype::Archetype, bundle::Bundle, entity::Entity};
+use crate::{archetype::Archetype, bundle::Bundle};
+use std::marker::PhantomData;
 
 pub struct Query<'a, T>
 where
-    T: Bundle,
+    T: Bundle<'a>,
 {
     archetype: &'a Archetype,
     current_index: usize,
@@ -13,7 +12,7 @@ where
 
 impl<'a, T> Query<'a, T>
 where
-    T: Bundle,
+    T: Bundle<'a>,
 {
     pub fn new(archetype: &'a Archetype) -> Self {
         Self {
@@ -26,7 +25,7 @@ where
 
 impl<'a, T> Iterator for Query<'a, T>
 where
-    T: Bundle,
+    T: Bundle<'a> + 'a,
 {
     type Item = &'a T;
     fn next(&mut self) -> Option<Self::Item> {
@@ -43,7 +42,7 @@ where
 
 pub struct QueryMut<'a, T>
 where
-    T: Bundle,
+    T: Bundle<'a>,
 {
     archetype: &'a Archetype,
     current_index: usize,
@@ -52,7 +51,7 @@ where
 
 impl<'a, T> QueryMut<'a, T>
 where
-    T: Bundle,
+    T: Bundle<'a>,
 {
     pub fn new(archetype: &'a Archetype) -> Self {
         Self {
@@ -65,7 +64,7 @@ where
 
 impl<'a, T> Iterator for QueryMut<'a, T>
 where
-    T: Bundle,
+    T: Bundle<'a> + 'a,
 {
     type Item = &'a mut T;
     fn next(&mut self) -> Option<Self::Item> {

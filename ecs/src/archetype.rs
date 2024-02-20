@@ -1,7 +1,7 @@
 use std::{
     alloc::{dealloc, realloc, Layout},
     any::TypeId,
-    mem,
+    dbg,
     ptr::{self, NonNull},
 };
 
@@ -69,7 +69,6 @@ impl Archetype {
     }
 
     pub unsafe fn remove(&mut self, entity: Entity, type_id: &[TypeId]) -> Option<Box<[*mut u8]>> {
-        //TODO: return the unused components
         let index = self.entities.binary_search(&entity);
         if index.is_err() {
             return None;
@@ -84,7 +83,7 @@ impl Archetype {
             let ty = self.types[ty_id];
             let last = self.capacity - 1;
             let moved = data.get(&ty, last as usize);
-            if !type_id.contains(ty_id) {
+            if type_id.contains(ty_id) {
                 unsafe {
                     let removed = data.get(&ty, index);
                     (ty.drop)(removed);
@@ -92,7 +91,9 @@ impl Archetype {
                 }
                 continue;
             }
-            ret.push(data.get(&ty, index));
+            let new = alloc(ty.layout);
+            ptr::copy_nonoverlapping(data.get(&ty, index), new, ty.layout.size());
+            ret.push(new);
         }
         return Some(ret.into_boxed_slice());
     }
@@ -121,13 +122,25 @@ impl Archetype {
         return self.entities.contains(&entity);
     }
 
-    pub fn get(&self, entity: Entity, type_id: &TypeId) -> Option<NonNull<u8>> {
+    pub unsafe fn get(&self, entity: Entity, type_ids: &[TypeId]) -> Option<Box<[*mut u8]>> {
         let index = self.entities.binary_search(&entity).ok()?;
-        let ty_index = self.type_ids.binary_search(type_id).ok()?;
-        let ty = &self.types[type_id];
-        return unsafe {
-            Some(NonNull::new(self.data[ty_index].get(ty, index)).expect("ptr is null"))
-        };
+        let mut res = Vec::new();
+        for type_id in type_ids {
+            let ty_index_matcher = || {
+                for (i, t) in self.type_ids.iter().enumerate() {
+                    if *t == *type_id {
+                        return Some(i);
+                    }
+                }
+                None
+            };
+
+            let ty_index = ty_index_matcher()?;
+
+            let ty = &self.types[type_id];
+            res.push(self.data[ty_index].get(ty, index));
+        }
+        return Some(res.into_boxed_slice());
     }
 
     pub unsafe fn get_by_index(
@@ -270,6 +283,18 @@ impl ArchetypeSet {
         return self.archetypes.get_mut(types);
     }
 
+    pub fn get_by_entity(&self, entity: Entity) -> Option<&Archetype> {
+        return self.archetypes.values().filter(|x| x.has(entity)).nth(0);
+    }
+
+    pub fn get_by_entity_mut(&mut self, entity: Entity) -> Option<&mut Archetype> {
+        return self
+            .archetypes
+            .values_mut()
+            .filter(|x| x.has(entity))
+            .nth(0);
+    }
+
     pub fn iter(&mut self) -> impl Iterator<Item = &Archetype> {
         return self.archetypes.values();
     }
@@ -365,7 +390,14 @@ mod tests {
         //unsafe { archetype.add(entity, &test_data as *const _ as *mut u8) };
         unsafe { archetype.add(entity, &test_data.as_ptrs()) };
 
-        let rest = unsafe { archetype.remove(entity, &[type_ids[0]]) };
+        let rest = unsafe { archetype.remove(entity, &[type_ids[0]]).unwrap() };
+        assert_eq!(rest.len(), 2);
+        let u = rest[0] as *mut u64;
+        let t = rest[1] as *mut TestComponent;
+        unsafe {
+            assert_eq!(test_data.1, *u);
+            assert_eq!(test_data.2, *t);
+        }
     }
 
     #[test]
