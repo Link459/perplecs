@@ -5,7 +5,7 @@ pub struct Query<'a, T>
 where
     T: Bundle<'a>,
 {
-    archetype: &'a Archetype,
+    main_archetype: &'a Archetype,
     current_index: usize,
     _phantom_data: PhantomData<T>,
 }
@@ -16,7 +16,7 @@ where
 {
     pub fn new(archetype: &'a Archetype) -> Self {
         Self {
-            archetype,
+            main_archetype: archetype,
             current_index: 0,
             _phantom_data: PhantomData::default(),
         }
@@ -27,16 +27,21 @@ impl<'a, T> Iterator for Query<'a, T>
 where
     T: Bundle<'a> + 'a,
 {
-    type Item = &'a T;
+    type Item = T::Target;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_index >= self.archetype.len() {
+        if self.current_index >= self.main_archetype.len() {
             return None;
         }
 
-        /*let ret = self.archetype.
+        //let data = unsafe { self.(entity, &T::type_ids())? };
+        let data = unsafe {
+            self.main_archetype
+                .get_by_index(self.current_index, &T::type_ids())
+                .unwrap()
+        };
+
         self.current_index += 1;
-        return Some(ret);*/
-        None
+        return Some(unsafe { T::from_ptr(&data) });
     }
 }
 
@@ -44,7 +49,7 @@ pub struct QueryMut<'a, T>
 where
     T: Bundle<'a>,
 {
-    archetype: &'a Archetype,
+    main_archetype: &'a Archetype,
     current_index: usize,
     _phantom_data: PhantomData<T>,
 }
@@ -55,7 +60,7 @@ where
 {
     pub fn new(archetype: &'a Archetype) -> Self {
         Self {
-            archetype,
+            main_archetype: archetype,
             current_index: 0,
             _phantom_data: PhantomData::default(),
         }
@@ -66,15 +71,33 @@ impl<'a, T> Iterator for QueryMut<'a, T>
 where
     T: Bundle<'a> + 'a,
 {
-    type Item = &'a mut T;
+    type Item = &'a mut T::Target;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_index >= self.archetype.len() {
+        if self.current_index >= self.main_archetype.len() {
             return None;
         }
 
-        /*let ret = self.archetype.
+        //let data = unsafe { self.(entity, &T::type_ids())? };
+        let data = unsafe {
+            self.main_archetype
+                .get_by_index(self.current_index, &T::type_ids())
+                .unwrap()
+        };
+
         self.current_index += 1;
-        return Some(ret);*/
-        None
+        //return Some(unsafe { &mut T::from_ptr(&data) });
+        return None;
     }
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn query_simple() {
+    }
+
+    #[test]
+    fn query_complex() {}
+
+    fn query_mut() {}
 }

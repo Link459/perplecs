@@ -1,8 +1,8 @@
 use rustc_hash::FxHashSet;
-use std::any::{Any, TypeId};
+use std::any::TypeId;
 
 use crate::{
-    archetype::{self, ArchetypeSet, TypeInfo},
+    archetype::ArchetypeSet,
     bundle::Bundle,
     entity::Entity,
     query::{Query, QueryMut},
@@ -139,6 +139,8 @@ mod test {
     use core::panic;
     use std::assert_eq;
 
+    use crate::bundle::Bundle;
+
     use super::World;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -149,8 +151,9 @@ mod test {
 
     #[test]
     fn world_add() {
+        type TestType = (TestComponent, u32);
         let mut w = World::new();
-        for _ in 0..3 {
+        for i in 0..1000 {
             let e = w.spawn();
             let test_data = (TestComponent { a: 4, b: 3 }, 3u32);
             w.add(e, test_data);
@@ -192,5 +195,31 @@ mod test {
         assert_eq!(*tuw.0, test_data2.0);
         assert_eq!(*tuw.1, test_data2.1);
         assert_eq!(*tuw.2, test_data2.2);
+    }
+
+    #[test]
+    fn world_query() {
+        type TestType = (TestComponent, u32);
+        let mut w = World::new();
+        let mut cmp_data = Vec::with_capacity(100);
+        for i in 0..100 {
+            let e = w.spawn();
+            let test_data = (
+                TestComponent {
+                    a: i,
+                    b: i as u32 + 4,
+                },
+                3u32,
+            );
+            cmp_data.push(test_data);
+            w.add(e, test_data);
+        }
+
+        let q = w.query::<TestType>();
+        for (j, (te, i)) in q.into_iter().enumerate() {
+            let cmp = cmp_data[j];
+            assert_eq!(*te, cmp.0);
+            assert_eq!(*i, cmp.1);
+        }
     }
 }
