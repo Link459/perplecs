@@ -2,7 +2,7 @@ use rustc_hash::FxHashSet;
 use std::any::TypeId;
 
 use crate::{
-    archetype::ArchetypeSet,
+    archetype::{ArchetypeSet, TypeInfo},
     bundle::Bundle,
     entity::Entity,
     query::{Query, QueryMut},
@@ -39,15 +39,16 @@ impl World {
     where
         T: Bundle<'a>,
     {
-        //let id = TypeId::of::<T>();
-        //let types = [id];
+        //TODO: check wether the data has to be moved
         let type_ids = T::type_ids();
         let type_infos = T::type_info();
+        //self.move_archetype(entity, &type_ids, &type_infos);
         if !self.archetypes.has(&type_ids) {
             self.archetypes.add(&type_ids, &type_infos);
         }
-
+        self.archetypes.move_types(entity, &type_ids, &type_infos);
         let archetype = self.archetypes.get_mut(&type_ids).unwrap();
+
         //whatever the hell this is
         unsafe {
             archetype.add(entity, &data.as_ptrs());
@@ -119,7 +120,7 @@ impl World {
         T: Bundle<'query>,
         'world: 'query,
     {
-        let archetype = self.archetypes.get(&T::type_ids()).unwrap();
+        let archetype = self.archetypes.get_similiar(&T::type_ids()).unwrap();
         return Query::new(archetype);
     }
 
@@ -136,10 +137,7 @@ impl World {
 
 #[cfg(test)]
 mod test {
-    use core::panic;
     use std::assert_eq;
-
-    use crate::bundle::Bundle;
 
     use super::World;
 
@@ -198,6 +196,23 @@ mod test {
     }
 
     #[test]
+    fn world_add_after() {
+        let mut w = World::new();
+        let e = w.spawn();
+        let test_data = (TestComponent { a: 4, b: 3 }, 3u32);
+        w.add(e, (test_data.0,));
+        w.add(e, (test_data.1,));
+
+        let t = w.get::<(TestComponent,)>(e).unwrap();
+        let u = w.get::<(u32,)>(e).unwrap();
+        let tu = w.get::<(TestComponent, u32)>(e).unwrap();
+        assert_eq!(*t, test_data.0);
+        assert_eq!(*u, test_data.1);
+        assert_eq!(*tu.0, test_data.0);
+        assert_eq!(*tu.1, test_data.1);
+    }
+
+    #[test]
     fn world_query() {
         type TestType = (TestComponent, u32);
         let mut w = World::new();
@@ -221,5 +236,40 @@ mod test {
             assert_eq!(*te, cmp.0);
             assert_eq!(*i, cmp.1);
         }
+    }
+
+    #[test]
+    fn world_query_multi_archetype() {
+        let mut w = World::new();
+        let mut cmp_data = Vec::with_capacity(100);
+        for i in 0..10 {
+            let e = w.spawn();
+            let test_data = (
+                TestComponent {
+                    a: i,
+                    b: i as u32 + 4,
+                },
+                3u32,
+            );
+            cmp_data.push(test_data);
+            w.add(e, test_data);
+        }
+
+        for i in 0..10 {
+            let e = w.spawn();
+            let test_data = (TestComponent { a: i, b: i as u32 },);
+            cmp_data.push((test_data.0, 0));
+            w.add(e, test_data);
+        }
+
+        let q = w.query::<(TestComponent,)>();
+        let mut count = 0;
+        for (i, te) in q.into_iter().enumerate() {
+            //only holds true if insertion order is maintained,may be changed later
+            assert_eq!(*te, cmp_data[i].0);
+            count += 1;
+        }
+
+        assert_eq!(count, 20);
     }
 }

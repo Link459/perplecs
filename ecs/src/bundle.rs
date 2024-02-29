@@ -18,6 +18,7 @@ pub trait Bundle<'a> {
     unsafe fn from_ptr(data: &[*mut u8]) -> Self::Target;
 }
 
+
 macro_rules! impl_bundle {
     ($($T:ident $I:tt),*)//; $($I:ident),*)
     => {

@@ -67,6 +67,7 @@ impl Archetype {
         // pushing after the data adding otherwise we would get a off by plus one
     }
 
+    //removes the specified type_ids and returns the data for the unspecefied ones
     pub unsafe fn remove(&mut self, entity: Entity, type_id: &[TypeId]) -> Option<Box<[*mut u8]>> {
         let index = self.entities.binary_search(&entity);
         if index.is_err() {
@@ -95,6 +96,11 @@ impl Archetype {
             ret.push(new);
         }
         return Some(ret.into_boxed_slice());
+    }
+
+    pub unsafe fn remove_whole(&mut self, entity: Entity) -> Option<Box<[*mut u8]>> {
+        //why?
+        return self.remove(entity, &self.type_ids.clone());
     }
 
     pub fn destroy(&mut self, entity: Entity) -> () {
@@ -142,11 +148,7 @@ impl Archetype {
         return Some(res.into_boxed_slice());
     }
 
-    pub unsafe fn get_by_index(
-        &self,
-        index: usize,
-        type_ids: &[TypeId],
-    ) -> Option<Box<[*mut u8]>> {
+    pub unsafe fn get_by_index(&self, index: usize, type_ids: &[TypeId]) -> Option<Box<[*mut u8]>> {
         let mut res = Vec::new();
         for type_id in type_ids {
             let ty_index_matcher = || {
@@ -331,12 +333,48 @@ impl ArchetypeSet {
             .nth(0);
     }
 
+    pub fn get_similiar(&self, types: &[TypeId]) -> Option<Box<[&Archetype]>> {
+        let similiar = self
+            .archetypes
+            .values()
+            .filter(|x| x.type_ids.iter().any(|y| types.contains(y)))
+            .collect::<Vec<_>>();
+        return Some(similiar.into_boxed_slice());
+    }
+
     pub fn iter(&mut self) -> impl Iterator<Item = &Archetype> {
         return self.archetypes.values();
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Archetype> {
         return self.archetypes.values_mut();
+    }
+
+    pub fn move_types(
+        &mut self,
+        entity: Entity,
+        new_types: &[TypeId],
+        new_infos: &[TypeInfo],
+    ) -> Option<()> {
+        {
+            let old_archetype = self.get_by_entity_mut(entity)?;
+
+            if *old_archetype.type_ids == *new_types {
+                return Some(());
+            }
+        }
+
+        if !self.has(new_types) {
+            self.add(new_types, new_infos);
+
+            let old_archetype = self.get_by_entity_mut(entity)?;
+            let data = unsafe { old_archetype.remove(entity, &[])? };
+            let combined_types = [old_archetype.type_ids.clone(), new_types.into()].concat();
+            let new_archetype = self.get_mut(&combined_types)?;
+            unsafe { new_archetype.add(entity, &data) };
+        }
+
+        return Some(());
     }
 }
 
@@ -488,6 +526,9 @@ mod tests {
         let entity = Entity(1);
         drop(archetype);
     }
+
+    #[test]
+    fn archetype_remove_whole() {}
 
     #[test]
     fn component_data_set() {
