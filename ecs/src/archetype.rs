@@ -100,7 +100,9 @@ impl Archetype {
 
     pub unsafe fn remove_whole(&mut self, entity: Entity) -> Option<Box<[*mut u8]>> {
         //why?
-        return self.remove(entity, &self.type_ids.clone());
+        // don't do this we gonna get empty stuff
+        //return self.remove(entity, &self.type_ids.clone());
+        return self.remove(entity, &[]);
     }
 
     pub fn destroy(&mut self, entity: Entity) -> () {
@@ -289,6 +291,7 @@ impl ComponentData {
     }
 }
 
+#[derive(Debug)]
 pub struct ArchetypeSet {
     archetypes: FxHashMap<Box<[TypeId]>, Archetype>,
 }
@@ -348,33 +351,6 @@ impl ArchetypeSet {
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Archetype> {
         return self.archetypes.values_mut();
-    }
-
-    pub fn move_types(
-        &mut self,
-        entity: Entity,
-        new_types: &[TypeId],
-        new_infos: &[TypeInfo],
-    ) -> Option<()> {
-        {
-            let old_archetype = self.get_by_entity_mut(entity)?;
-
-            if *old_archetype.type_ids == *new_types {
-                return Some(());
-            }
-        }
-
-        if !self.has(new_types) {
-            self.add(new_types, new_infos);
-
-            let old_archetype = self.get_by_entity_mut(entity)?;
-            let data = unsafe { old_archetype.remove(entity, &[])? };
-            let combined_types = [old_archetype.type_ids.clone(), new_types.into()].concat();
-            let new_archetype = self.get_mut(&combined_types)?;
-            unsafe { new_archetype.add(entity, &data) };
-        }
-
-        return Some(());
     }
 }
 
@@ -475,6 +451,38 @@ mod tests {
     }
 
     #[test]
+    fn archetype_remove_whole() {
+        let type_ids = [
+            TypeId::of::<u32>(),
+            TypeId::of::<u64>(),
+            TypeId::of::<TestComponent>(),
+        ];
+        let type_infos = [
+            TypeInfo::new::<u32>(),
+            TypeInfo::new::<u64>(),
+            TypeInfo::new::<TestComponent>(),
+        ];
+        let mut archetype = Archetype::new(&type_ids, &type_infos);
+
+        let mut test_data = (3u32, 2u64, TestComponent { a: 1, b: 346 });
+        let entity = Entity(3);
+
+        //unsafe { archetype.add(entity, &test_data as *const _ as *mut u8) };
+        unsafe { archetype.add(entity, &test_data.as_ptrs()) };
+
+        let all = unsafe { archetype.remove_whole(entity).unwrap() };
+        assert_eq!(all.len(), 3);
+        let w = all[0] as *mut u32;
+        let u = all[1] as *mut u64;
+        let t = all[2] as *mut TestComponent;
+        unsafe {
+            assert_eq!(test_data.0, *w);
+            assert_eq!(test_data.1, *u);
+            assert_eq!(test_data.2, *t);
+        }
+    }
+
+    #[test]
     fn archetype_grow() {
         let type_ids = [];
         let type_infos = [];
@@ -526,9 +534,6 @@ mod tests {
         let entity = Entity(1);
         drop(archetype);
     }
-
-    #[test]
-    fn archetype_remove_whole() {}
 
     #[test]
     fn component_data_set() {

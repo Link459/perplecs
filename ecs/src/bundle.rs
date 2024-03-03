@@ -10,14 +10,19 @@ fn from_ptr<'a, T>(data: *mut u8) -> &'a T {
     unsafe { &*(data as *const T) }
 }
 
+fn from_ptr_mut<'a, T>(data: *mut u8) -> &'a mut T {
+    unsafe { &mut *(data as *const T as *mut T) }
+}
+
 pub trait Bundle<'a> {
     type Target;
+    type TargetMut;
     fn type_info() -> Box<[TypeInfo]>;
     fn type_ids() -> Box<[TypeId]>;
     unsafe fn as_ptrs(&mut self) -> Box<[*mut u8]>;
     unsafe fn from_ptr(data: &[*mut u8]) -> Self::Target;
+    unsafe fn from_ptr_mut(data: &[*mut u8]) -> Self::TargetMut;
 }
-
 
 macro_rules! impl_bundle {
     ($($T:ident $I:tt),*)//; $($I:ident),*)
@@ -28,6 +33,9 @@ macro_rules! impl_bundle {
 
 			#[allow(unused_parens)]
             type Target = ($(&'a $T),*);
+
+			#[allow(unused_parens)]
+            type TargetMut = ($(&'a mut $T),*);
 
             fn type_info() -> Box<[TypeInfo]> {
                 Box::new([
@@ -47,9 +55,15 @@ macro_rules! impl_bundle {
                     $(into_ptr(&mut self.$I)),*
                 ])
             }
+
 			unsafe fn from_ptr(data: &[*mut u8]) -> Self::Target {
                ( $(from_ptr(data[$I])),*  )
            }
+
+			unsafe fn from_ptr_mut(data: &[*mut u8]) -> Self::TargetMut {
+               ( $(from_ptr_mut(data[$I])),*  )
+           }
+
         }
     };
 }
