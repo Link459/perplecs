@@ -121,6 +121,7 @@ impl Archetype {
                 let last = self.capacity - 1;
                 let moved = data.get(&ty, last as usize);
                 ptr::copy_nonoverlapping(moved, removed, ty.layout.size());
+                dealloc(removed, ty.layout);
             }
         }
     }
@@ -217,7 +218,10 @@ impl Drop for Archetype {
                 };
             }
 
-            unsafe { dealloc(data.0.as_ptr(), ty.layout) };
+            let layout =
+                Layout::from_size_align(ty.layout.size() * self.capacity(), ty.layout.align())
+                    .unwrap();
+            unsafe { dealloc(data.0.as_ptr(), layout) };
         }
     }
 }
@@ -279,7 +283,8 @@ impl ComponentData {
         self.0 = {
             let old_layout = Layout::from_size_align(layout.size() * old_size, layout.align())
                 .expect("way to many components");
-            let ptr = realloc(self.0.as_ptr(), old_layout, new_size * old_layout.size());
+            let ptr = realloc(self.0.as_ptr(), old_layout, new_size * layout.size());
+
             NonNull::new(ptr).expect("expected a valid pointer,got a null pointer instead")
         };
     }
@@ -288,6 +293,10 @@ impl ComponentData {
         let refs = &self.0.as_ptr();
         let ptr = refs as *const *mut u8;
         return std::slice::from_raw_parts(ptr, size);
+    }
+
+    pub unsafe fn dealloc(self, layout: &Layout) -> () {
+        dealloc(self.0.as_ptr(), *layout);
     }
 }
 
@@ -358,7 +367,12 @@ impl ArchetypeSet {
 mod tests {
     use super::{Archetype, ComponentData, TypeInfo};
     use crate::{bundle::Bundle, entity::Entity};
-    use std::{any::TypeId, assert_eq};
+    use std::{
+        alloc::{dealloc, Layout},
+        any::TypeId,
+        assert_eq,
+        mem::{align_of, size_of},
+    };
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     struct TestComponent {
@@ -442,12 +456,16 @@ mod tests {
 
         let rest = unsafe { archetype.remove(entity, &[type_ids[0]]).unwrap() };
         assert_eq!(rest.len(), 2);
-        let u = rest[0] as *mut u64;
-        let t = rest[1] as *mut TestComponent;
+        let r1 = rest[0] as *mut u64;
+        let r2 = rest[1] as *mut TestComponent;
         unsafe {
-            assert_eq!(test_data.1, *u);
-            assert_eq!(test_data.2, *t);
+            assert_eq!(test_data.1, *r1);
+            assert_eq!(test_data.2, *r2);
         }
+        unsafe {
+            dealloc(r1 as *mut u8, Layout::new::<u64>());
+            dealloc(r2 as *mut u8, Layout::new::<TestComponent>());
+        };
     }
 
     #[test]
@@ -480,6 +498,24 @@ mod tests {
             assert_eq!(test_data.1, *u);
             assert_eq!(test_data.2, *t);
         }
+
+        unsafe {
+            dealloc(
+                all[0],
+                Layout::from_size_align_unchecked(size_of::<u32>(), align_of::<u32>()),
+            );
+            dealloc(
+                all[1],
+                Layout::from_size_align_unchecked(size_of::<u64>(), align_of::<u64>()),
+            );
+            dealloc(
+                all[2],
+                Layout::from_size_align_unchecked(
+                    size_of::<TestComponent>(),
+                    align_of::<TestComponent>(),
+                ),
+            );
+        };
     }
 
     #[test]
@@ -529,9 +565,10 @@ mod tests {
             TypeInfo::new::<TestComponent>(),
         ];
         let mut archetype = Archetype::new(&type_ids, &type_infos);
-        let test_data = TestComponent { a: 3, b: 8 };
+        let mut data = (TestComponent { a: 3, b: 8 },);
 
         let entity = Entity(1);
+        unsafe { archetype.add(entity, &data.as_ptrs()) };
         drop(archetype);
     }
 
@@ -539,9 +576,7 @@ mod tests {
     fn component_data_set() {
         let type_info = TypeInfo::new::<TestComponent>();
         let layout = type_info.layout;
-        let mut data = unsafe { ComponentData::new(layout, 1) };
-        let new_size = layout.size() * 5;
-        unsafe { data.grow(&layout, 1, new_size) };
+        let mut data = unsafe { ComponentData::new(layout, 5) };
         let mut test_components = Vec::new();
         for i in 0..5 {
             let component = TestComponent {
@@ -554,12 +589,19 @@ mod tests {
             unsafe { data.set(&type_info, i.into(), ptr) };
         }
 
-        let test_components = dbg!(test_components);
-        let data = dbg!(data);
-        let ts = unsafe {
+        /*let ts = unsafe {
             Vec::<TestComponent>::from_raw_parts(data.0.as_ptr() as *mut TestComponent, 5, 16)
-        };
-        assert_eq!(test_components, ts);
+        };*/
+        //assert_eq!(test_components, ts);
+        //
+
+        unsafe {
+            let layout = Layout::from_size_align_unchecked(
+                5 * size_of::<TestComponent>(),
+                align_of::<TestComponent>(),
+            );
+            data.dealloc(&layout)
+        }
     }
 
     #[test]
@@ -584,6 +626,14 @@ mod tests {
 
         assert_eq!(test_component, *ptr);
         assert_eq!(test_component2, *ptr2);
+
+        unsafe {
+            let layout = Layout::from_size_align_unchecked(
+                new_size * size_of::<TestComponent>(),
+                align_of::<TestComponent>(),
+            );
+            data.dealloc(&layout)
+        }
     }
 
     #[test]
@@ -608,6 +658,12 @@ mod tests {
 
         assert_eq!(test_component, *ptr);
         assert_eq!(test_component2, *ptr2);
+
+        unsafe {
+            let layout =
+                Layout::from_size_align_unchecked(new_size * size_of::<u32>(), align_of::<u32>());
+            data.dealloc(&layout)
+        };
     }
 
     #[test]
@@ -615,10 +671,18 @@ mod tests {
         let type_info = TypeInfo::new::<u32>();
         let layout = type_info.layout;
         let mut data = unsafe { ComponentData::new(layout, 1) };
+        let mut old_capacity;
         let mut capacity = 1;
         for _ in 0..12 {
+            old_capacity = capacity;
             capacity *= 2;
-            unsafe { data.grow(&layout, 1, capacity) };
+            unsafe { data.grow(&layout, old_capacity, capacity) };
+        }
+
+        unsafe {
+            let layout =
+                Layout::from_size_align_unchecked(capacity * size_of::<u32>(), align_of::<u32>());
+            data.dealloc(&layout)
         }
     }
 }

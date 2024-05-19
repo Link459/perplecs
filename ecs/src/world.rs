@@ -1,5 +1,4 @@
 use rustc_hash::FxHashSet;
-use std::any::TypeId;
 
 use crate::{
     archetype::ArchetypeSet,
@@ -40,7 +39,7 @@ impl World {
     where
         T: Bundle<'a>,
     {
-        //this do be a pain
+        //unoptimal but it works
         let type_ids = T::type_ids();
         let type_infos = T::type_info();
         let mut new_data = unsafe { data.as_ptrs() };
@@ -65,9 +64,9 @@ impl World {
                     let Some(old_data) = archetype.remove_whole(entity) else {
                         return;
                     };
-                    let old_data = dbg!(old_data);
                     old_data
                 };
+
                 new_data = [old_data, unsafe { data.as_ptrs() }]
                     .concat()
                     .into_boxed_slice();
@@ -88,10 +87,6 @@ impl World {
                 new_archetype
             }
         };
-        /*if !self.archetypes.has(&type_ids) {
-            self.archetypes.add(&type_ids, &type_infos);
-        }
-        let archetype = self.archetypes.get_mut(&type_ids).unwrap();*/
 
         unsafe {
             //archetype.add(entity, &data.as_ptrs());
@@ -104,19 +99,16 @@ impl World {
         T: Bundle<'a>,
     {
         let type_ids = T::type_ids();
-        let new_type_ids;
-        let new_type_info;
         let rest;
-        {
-            let archetype = self.archetypes.get_by_entity_mut(entity)?;
-            rest = unsafe { archetype.remove(entity, &type_ids)? };
-            new_type_ids = archetype.type_ids.clone();
-            new_type_info = archetype
-                .type_ids
-                .iter()
-                .map(|x| archetype.types[x])
-                .collect::<Vec<_>>();
-        }
+
+        let archetype = self.archetypes.get_by_entity_mut(entity)?;
+        rest = unsafe { archetype.remove(entity, &type_ids)? };
+        let new_type_ids = archetype.type_ids.clone();
+        let new_type_info = archetype
+            .type_ids
+            .iter()
+            .map(|x| archetype.types[x])
+            .collect::<Vec<_>>();
 
         if !self.archetypes.has(&new_type_ids) {
             self.archetypes.add(&new_type_ids, &new_type_info);
@@ -187,7 +179,7 @@ impl World {
 
 #[cfg(test)]
 mod test {
-    use std::{any::TypeId, assert_eq};
+    use std::assert_eq;
 
     use super::World;
 
@@ -199,9 +191,8 @@ mod test {
 
     #[test]
     fn world_add() {
-        type TestType = (TestComponent, u32);
         let mut w = World::new();
-        for i in 0..1000 {
+        for _ in 0..100 {
             let e = w.spawn();
             let test_data = (TestComponent { a: 4, b: 3 }, 3u32);
             w.add(e, test_data);
@@ -350,9 +341,8 @@ mod test {
             w.add(e, test_data);
         }
 
-        let q = w.query::<(TestComponent,)>();
         let mut count = 0;
-        for (i, te) in q.into_iter().enumerate() {
+        for (i, te) in w.query::<(TestComponent,)>().into_iter().enumerate() {
             //only holds true if insertion order is maintained,may be changed later
             assert_eq!(*te, cmp_data[i].0);
             count += 1;

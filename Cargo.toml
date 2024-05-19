@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 perplecs-ecs = { path = "ecs"}
+perplecs-macros = { path = "ecs-macros" }
 
 [workspace]
 members = [
@@ -15,3 +16,11 @@ members = [
 ]
 
 [lib]
+
+[[example]]
+name = "physics"
+path = "examples/physics.rs"
+
+[[example]]
+name = "derive_bundle"
+path = "examples/derive_bundle.rs"

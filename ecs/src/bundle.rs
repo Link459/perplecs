@@ -2,15 +2,15 @@ use std::any::TypeId;
 
 use crate::archetype::TypeInfo;
 
-fn into_ptr<T>(data: &mut T) -> *mut u8 {
+pub fn into_ptr<T>(data: &mut T) -> *mut u8 {
     return data as *const _ as *mut u8;
 }
 
-fn from_ptr<'a, T>(data: *mut u8) -> &'a T {
+pub fn from_ptr<'a, T>(data: *mut u8) -> &'a T {
     unsafe { &*(data as *const T) }
 }
 
-fn from_ptr_mut<'a, T>(data: *mut u8) -> &'a mut T {
+pub fn from_ptr_mut<'a, T>(data: *mut u8) -> &'a mut T {
     unsafe { &mut *(data as *const T as *mut T) }
 }
 
