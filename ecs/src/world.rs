@@ -1,3 +1,5 @@
+use core::alloc::Allocator;
+
 use rustc_hash::FxHashSet;
 
 use crate::{
@@ -7,14 +9,19 @@ use crate::{
     query::{Query, QueryMut},
 };
 
-#[derive(Debug)]
-pub struct World {
-    archetypes: ArchetypeSet,
+pub struct World<A>
+where
+    A: Allocator,
+{
+    archetypes: ArchetypeSet<A>,
     entities: FxHashSet<Entity>,
     next_entity: u64,
 }
 
-impl World {
+impl<A> World<A>
+where
+    A: Allocator,
+{
     pub fn new() -> Self {
         Self {
             archetypes: ArchetypeSet::new(),
@@ -151,7 +158,7 @@ impl World {
         return false;
     }
 
-    pub fn query<'world, 'query, T>(&'world self) -> Query<'query, T>
+    pub fn query<'world, 'query, T>(&'world self) -> Query<'query, T, A>
     where
         T: Bundle<'query>,
         'world: 'query,
@@ -163,7 +170,7 @@ impl World {
         return Query::new(archetype);
     }
 
-    pub fn query_mut<'world, 'query, T>(&'world self) -> QueryMut<'query, T>
+    pub fn query_mut<'world, 'query, T>(&'world mut self) -> QueryMut<'query, T, A>
     where
         T: Bundle<'query>,
         'world: 'query,
@@ -171,7 +178,7 @@ impl World {
         //Don't unwrap
         let archetype = self
             .archetypes
-            .get_similiar(&T::type_ids())
+            .get_similiar_mut(&T::type_ids())
             .unwrap_or_default();
         return QueryMut::new(archetype);
     }
@@ -179,11 +186,13 @@ impl World {
 
 #[cfg(test)]
 mod test {
+    use std::alloc::Global;
     use std::assert_eq;
+    use std::collections::HashSet;
 
-    use super::World;
+    type World = super::World<Global>;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     struct TestComponent {
         a: u8,
         b: u32,
@@ -216,7 +225,6 @@ mod test {
         let test_data2 = (TestComponent { a: 4, b: 3 }, 3u32, 4u64);
         w.add(e2, test_data2);
 
-        let w = dbg!(w);
         let t = w.get::<(TestComponent,)>(e).unwrap();
         let u = w.get::<(u32,)>(e).unwrap();
         let tu = w.get::<(TestComponent, u32)>(e).unwrap();
@@ -320,7 +328,7 @@ mod test {
     #[test]
     fn world_query_multi_archetype() {
         let mut w = World::new();
-        let mut cmp_data = Vec::with_capacity(100);
+        let mut cmp_data = HashSet::with_capacity(20);
         for i in 0..10 {
             let e = w.spawn();
             let test_data = (
@@ -330,21 +338,20 @@ mod test {
                 },
                 3u32,
             );
-            cmp_data.push(test_data);
+            cmp_data.insert(test_data.0);
             w.add(e, test_data);
         }
 
         for i in 0..10 {
             let e = w.spawn();
             let test_data = (TestComponent { a: i, b: i as u32 },);
-            cmp_data.push((test_data.0, 0));
+            cmp_data.insert(test_data.0);
             w.add(e, test_data);
         }
 
         let mut count = 0;
-        for (i, te) in w.query::<(TestComponent,)>().into_iter().enumerate() {
-            //only holds true if insertion order is maintained,may be changed later
-            assert_eq!(*te, cmp_data[i].0);
+        for te in w.query::<(TestComponent,)>() {
+            assert!(cmp_data.contains(te));
             count += 1;
         }
 

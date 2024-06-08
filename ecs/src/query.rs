@@ -1,22 +1,23 @@
 use crate::{archetype::Archetype, bundle::Bundle};
-use std::marker::PhantomData;
+use std::{alloc::Allocator, marker::PhantomData};
 
-#[derive(Default)]
-pub struct Query<'a, T>
+pub struct Query<'a, T, A>
 where
     T: Bundle<'a>,
+    A: Allocator,
 {
-    archetypes: Box<[&'a Archetype]>,
+    archetypes: Box<[&'a Archetype<A>]>,
     archetype_index: usize,
     current_index: usize,
     _phantom_data: PhantomData<T>,
 }
 
-impl<'a, T> Query<'a, T>
+impl<'a, T, A> Query<'a, T, A>
 where
     T: Bundle<'a>,
+    A: Allocator,
 {
-    pub fn new(archetypes: Box<[&'a Archetype]>) -> Self {
+    pub fn new(archetypes: Box<[&'a Archetype<A>]>) -> Self {
         Self {
             archetypes,
             archetype_index: 0,
@@ -26,9 +27,10 @@ where
     }
 }
 
-impl<'a, T> Iterator for Query<'a, T>
+impl<'a, T, A> Iterator for Query<'a, T, A>
 where
     T: Bundle<'a> + 'a,
+    A: Allocator,
 {
     type Item = T::Target;
     fn next(&mut self) -> Option<Self::Item> {
@@ -55,21 +57,23 @@ where
 }
 
 #[derive(Default)]
-pub struct QueryMut<'a, T>
+pub struct QueryMut<'a, T, A>
 where
     T: Bundle<'a>,
+    A: Allocator,
 {
-    archetypes: Box<[&'a Archetype]>,
+    archetypes: Box<[&'a mut Archetype<A>]>,
     archetype_index: usize,
     current_index: usize,
     _phantom_data: PhantomData<T>,
 }
 
-impl<'a, T> QueryMut<'a, T>
+impl<'a, T, A> QueryMut<'a, T, A>
 where
     T: Bundle<'a>,
+    A: Allocator,
 {
-    pub fn new(archetypes: Box<[&'a Archetype]>) -> Self {
+    pub fn new(archetypes: Box<[&'a mut Archetype<A>]>) -> Self {
         Self {
             archetypes,
             archetype_index: 0,
@@ -79,9 +83,10 @@ where
     }
 }
 
-impl<'a, T> Iterator for QueryMut<'a, T>
+impl<'a, T,A> Iterator for QueryMut<'a, T,A>
 where
     T: Bundle<'a> + 'a,
+    A: Allocator
 {
     type Item = T::TargetMut;
     fn next(&mut self) -> Option<Self::Item> {

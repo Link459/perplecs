@@ -1,6 +1,7 @@
 use std::{
-    alloc::{dealloc, realloc, Layout},
+    alloc::{dealloc, realloc, Allocator, Global, Layout},
     any::TypeId,
+    marker::PhantomData,
     ptr::{self, NonNull},
 };
 
@@ -10,15 +11,21 @@ use std::alloc::alloc;
 use crate::entity::Entity;
 
 #[derive(Default, Clone, Debug)]
-pub struct Archetype {
+pub struct Archetype<A>
+where
+    A: Allocator,
+{
     pub(crate) types: FxHashMap<TypeId, TypeInfo>,
     pub(crate) type_ids: Box<[TypeId]>,
     pub(crate) entities: Vec<Entity>, //Box<[Entity]>,
     capacity: usize,
-    pub(crate) data: Box<[ComponentData]>,
+    pub(crate) data: Box<[ComponentData<A>]>,
 }
 
-impl Archetype {
+impl<A> Archetype<A>
+where
+    A: Allocator,
+{
     pub fn new(type_ids: &[TypeId], type_info: &[TypeInfo]) -> Self {
         let mut types = FxHashMap::default();
         for i in type_info {
@@ -183,7 +190,7 @@ impl Archetype {
         };
     }
 
-    unsafe fn alloc(&self, id: TypeId, size: usize) -> ComponentData {
+    unsafe fn alloc(&self, id: TypeId, size: usize) -> ComponentData<A> {
         let info = self.types.get(&id).expect("invalid type");
         return ComponentData::new(info.layout, size);
     }
@@ -206,7 +213,10 @@ impl Archetype {
     }
 }
 
-impl Drop for Archetype {
+impl<A> Drop for Archetype<A>
+where
+    A: Allocator,
+{
     fn drop(&mut self) {
         for (data, ty) in self.data.iter().zip(self.type_ids.iter()) {
             let ty = &self.types[ty];
@@ -253,9 +263,12 @@ impl TypeInfo {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct ComponentData(NonNull<u8>);
+pub struct ComponentData<A>(NonNull<u8>, PhantomData<A>);
 
-impl ComponentData {
+impl<A> ComponentData<A>
+where
+    A: Allocator,
+{
     pub unsafe fn new(layout: Layout, size: usize) -> Self {
         let new_layout =
             Layout::from_size_align(layout.size() * size, layout.align()).expect("unexpected");
@@ -266,6 +279,7 @@ impl ComponentData {
     pub fn from_ptr(ptr: *mut u8) -> Self {
         return Self(
             NonNull::new(ptr).expect("expected a valid pointer,got a null pointer instead"),
+            PhantomData::default(),
         );
     }
 
@@ -300,12 +314,17 @@ impl ComponentData {
     }
 }
 
-#[derive(Debug)]
-pub struct ArchetypeSet {
-    archetypes: FxHashMap<Box<[TypeId]>, Archetype>,
+pub struct ArchetypeSet<A>
+where
+    A: Allocator,
+{
+    archetypes: FxHashMap<Box<[TypeId]>, Archetype<A>>,
 }
 
-impl ArchetypeSet {
+impl<A> ArchetypeSet<A>
+where
+    A: Allocator,
+{
     pub fn new() -> Self {
         Self {
             archetypes: FxHashMap::default(),
@@ -325,19 +344,19 @@ impl ArchetypeSet {
         self.archetypes.remove(types);
     }
 
-    pub fn get(&self, types: &[TypeId]) -> Option<&Archetype> {
+    pub fn get(&self, types: &[TypeId]) -> Option<&Archetype<A>> {
         return self.archetypes.get(types);
     }
 
-    pub fn get_mut(&mut self, types: &[TypeId]) -> Option<&mut Archetype> {
+    pub fn get_mut(&mut self, types: &[TypeId]) -> Option<&mut Archetype<A>> {
         return self.archetypes.get_mut(types);
     }
 
-    pub fn get_by_entity(&self, entity: Entity) -> Option<&Archetype> {
+    pub fn get_by_entity(&self, entity: Entity) -> Option<&Archetype<A>> {
         return self.archetypes.values().filter(|x| x.has(entity)).nth(0);
     }
 
-    pub fn get_by_entity_mut(&mut self, entity: Entity) -> Option<&mut Archetype> {
+    pub fn get_by_entity_mut(&mut self, entity: Entity) -> Option<&mut Archetype<A>> {
         return self
             .archetypes
             .values_mut()
@@ -345,7 +364,7 @@ impl ArchetypeSet {
             .nth(0);
     }
 
-    pub fn get_similiar(&self, types: &[TypeId]) -> Option<Box<[&Archetype]>> {
+    pub fn get_similiar(&self, types: &[TypeId]) -> Option<Box<[&Archetype<A>]>> {
         let similiar = self
             .archetypes
             .values()
@@ -354,11 +373,20 @@ impl ArchetypeSet {
         return Some(similiar.into_boxed_slice());
     }
 
-    pub fn iter(&mut self) -> impl Iterator<Item = &Archetype> {
+    pub fn get_similiar_mut(&mut self, types: &[TypeId]) -> Option<Box<[&mut Archetype<A>]>> {
+        let similiar = self
+            .archetypes
+            .values_mut()
+            .filter(|x| x.type_ids.iter().any(|y| types.contains(y)))
+            .collect::<Vec<_>>();
+        return Some(similiar.into_boxed_slice());
+    }
+
+    pub fn iter(&mut self) -> impl Iterator<Item = &Archetype<A>> {
         return self.archetypes.values();
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Archetype> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Archetype<A>> {
         return self.archetypes.values_mut();
     }
 }
@@ -368,7 +396,7 @@ mod tests {
     use super::{Archetype, ComponentData, TypeInfo};
     use crate::{bundle::Bundle, entity::Entity};
     use std::{
-        alloc::{dealloc, Layout},
+        alloc::{dealloc, Global, Layout},
         any::TypeId,
         assert_eq,
         mem::{align_of, size_of},
@@ -392,7 +420,7 @@ mod tests {
             TypeInfo::new::<f64>(),
             TypeInfo::new::<TestComponent>(),
         ];
-        let archetype = Archetype::new(&type_ids, &type_infos);
+        let archetype = Archetype::<Global>::new(&type_ids, &type_infos);
         assert_eq!(*archetype.type_ids, type_ids);
         assert!(archetype.types.contains_key(&type_ids[0]));
         assert!(archetype.types.contains_key(&type_ids[1]));
@@ -411,7 +439,7 @@ mod tests {
             TypeInfo::new::<u64>(),
             TypeInfo::new::<TestComponent>(),
         ];
-        let mut archetype = Archetype::new(&type_ids, &type_infos);
+        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos);
 
         let mut test_data = (3u32, 2u64, TestComponent { a: 1, b: 346 });
         let entity = Entity(3);
@@ -446,7 +474,7 @@ mod tests {
             TypeInfo::new::<u64>(),
             TypeInfo::new::<TestComponent>(),
         ];
-        let mut archetype = Archetype::new(&type_ids, &type_infos);
+        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos);
 
         let mut test_data = (3u32, 2u64, TestComponent { a: 1, b: 346 });
         let entity = Entity(3);
@@ -480,7 +508,7 @@ mod tests {
             TypeInfo::new::<u64>(),
             TypeInfo::new::<TestComponent>(),
         ];
-        let mut archetype = Archetype::new(&type_ids, &type_infos);
+        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos);
 
         let mut test_data = (3u32, 2u64, TestComponent { a: 1, b: 346 });
         let entity = Entity(3);
@@ -522,7 +550,7 @@ mod tests {
     fn archetype_grow() {
         let type_ids = [];
         let type_infos = [];
-        let mut archetype = Archetype::new(&type_ids, &type_infos);
+        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos);
         for _ in 0..10 {
             unsafe { archetype.grow(archetype.capacity * 2) };
         }
@@ -540,7 +568,7 @@ mod tests {
             TypeInfo::new::<u64>(),
             TypeInfo::new::<TestComponent>(),
         ];
-        let mut archetype = Archetype::new(&type_ids, &type_infos);
+        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos);
 
         for i in 0..12 {
             let entity = Entity(i);
@@ -564,7 +592,7 @@ mod tests {
             TypeInfo::new::<u64>(),
             TypeInfo::new::<TestComponent>(),
         ];
-        let mut archetype = Archetype::new(&type_ids, &type_infos);
+        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos);
         let mut data = (TestComponent { a: 3, b: 8 },);
 
         let entity = Entity(1);
@@ -576,7 +604,7 @@ mod tests {
     fn component_data_set() {
         let type_info = TypeInfo::new::<TestComponent>();
         let layout = type_info.layout;
-        let mut data = unsafe { ComponentData::new(layout, 5) };
+        let mut data = unsafe { ComponentData::<Global>::new(layout, 5) };
         let mut test_components = Vec::new();
         for i in 0..5 {
             let component = TestComponent {
@@ -608,7 +636,7 @@ mod tests {
     fn component_data_get() {
         let type_info = TypeInfo::new::<TestComponent>();
         let layout = type_info.layout;
-        let mut data = unsafe { ComponentData::new(layout, 1) };
+        let mut data = unsafe { ComponentData::<Global>::new(layout, 1) };
         let length = 2;
         let new_size = layout.size() * length;
         unsafe { data.grow(&layout, 1, new_size) };
@@ -640,7 +668,7 @@ mod tests {
     fn component_data_with_small_types() {
         let type_info = TypeInfo::new::<u32>();
         let layout = type_info.layout;
-        let mut data = unsafe { ComponentData::new(layout, 1) };
+        let mut data = unsafe { ComponentData::<Global>::new(layout, 1) };
         let length = 2;
         let new_size = layout.size() * length;
         unsafe { data.grow(&layout, 1, new_size) };
@@ -670,7 +698,7 @@ mod tests {
     fn component_data_grow() {
         let type_info = TypeInfo::new::<u32>();
         let layout = type_info.layout;
-        let mut data = unsafe { ComponentData::new(layout, 1) };
+        let mut data = unsafe { ComponentData::<Global>::new(layout, 1) };
         let mut old_capacity;
         let mut capacity = 1;
         for _ in 0..12 {
