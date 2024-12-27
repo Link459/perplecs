@@ -1,16 +1,16 @@
-use std::{
-    alloc::{dealloc, realloc, Allocator, Global, Layout},
+use core::{
+    alloc::{Allocator, Layout},
     any::TypeId,
     marker::PhantomData,
     ptr::{self, NonNull},
 };
 
+use alloc::{boxed::Box, vec::Vec};
 use rustc_hash::FxHashMap;
-use std::alloc::alloc;
 
 use crate::entity::Entity;
 
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct Archetype<A>
 where
     A: Allocator,
@@ -20,13 +20,14 @@ where
     pub(crate) entities: Vec<Entity>, //Box<[Entity]>,
     capacity: usize,
     pub(crate) data: Box<[ComponentData<A>]>,
+    pub(crate) allocator: A,
 }
 
 impl<A> Archetype<A>
 where
     A: Allocator,
 {
-    pub fn new(type_ids: &[TypeId], type_info: &[TypeInfo]) -> Self {
+    pub fn new(type_ids: &[TypeId], type_info: &[TypeInfo], allocator: A) -> Self {
         let mut types = FxHashMap::default();
         for i in type_info {
             types.insert(i.id, *i);
@@ -38,6 +39,7 @@ where
             entities: Vec::new(),
             capacity: 16,
             data: Box::new([]),
+            allocator,
         };
 
         let mut data = Vec::with_capacity(type_ids.len());
@@ -98,7 +100,8 @@ where
                 }
                 continue;
             }
-            let new = alloc(ty.layout);
+            let new = self.allocator.allocate(ty.layout).unwrap().as_ptr() as *mut u8;
+            //let new = alloc(ty.layout);
             ptr::copy_nonoverlapping(data.get(&ty, index), new, ty.layout.size());
             ret.push(new);
         }
@@ -128,7 +131,9 @@ where
                 let last = self.capacity - 1;
                 let moved = data.get(&ty, last as usize);
                 ptr::copy_nonoverlapping(moved, removed, ty.layout.size());
-                dealloc(removed, ty.layout);
+                //dealloc(removed, ty.layout);
+                let removed = NonNull::new(removed).unwrap();
+                self.allocator.deallocate(removed, ty.layout);
             }
         }
     }
@@ -192,14 +197,14 @@ where
 
     unsafe fn alloc(&self, id: TypeId, size: usize) -> ComponentData<A> {
         let info = self.types.get(&id).expect("invalid type");
-        return ComponentData::new(info.layout, size);
+        return ComponentData::new(info.layout, size, &self.allocator);
     }
 
     //TODO: do this correctly
     unsafe fn grow(&mut self, new_size: usize) {
         for (data, ty) in self.data.iter_mut().zip(self.type_ids.iter()) {
             let ty = self.types[ty];
-            data.grow(&ty.layout, self.capacity, new_size);
+            data.grow(&ty.layout, self.capacity, new_size, &self.allocator);
         }
         self.capacity = new_size;
     }
@@ -231,7 +236,10 @@ where
             let layout =
                 Layout::from_size_align(ty.layout.size() * self.capacity(), ty.layout.align())
                     .unwrap();
-            unsafe { dealloc(data.0.as_ptr(), layout) };
+            unsafe {
+                self.allocator.deallocate(data.0, layout);
+            }
+            //unsafe { dealloc(data.0.as_ptr(), layout) };
         }
     }
 }
@@ -269,35 +277,57 @@ impl<A> ComponentData<A>
 where
     A: Allocator,
 {
-    pub unsafe fn new(layout: Layout, size: usize) -> Self {
+    pub unsafe fn new(layout: Layout, size: usize, allocator: &A) -> Self {
         let new_layout =
             Layout::from_size_align(layout.size() * size, layout.align()).expect("unexpected");
-        let ptr = alloc(new_layout);
+        let ptr = allocator
+            .allocate(new_layout)
+            .expect("failed to allocator")
+            .as_ptr() as *mut u8;
+        //let ptr = alloc(new_layout);
+        let ptr = NonNull::new(ptr).expect("failed to allocate memory");
         Self::from_ptr(ptr)
     }
 
-    pub fn from_ptr(ptr: *mut u8) -> Self {
+    pub fn from_ptr(ptr: NonNull<u8>) -> Self {
         return Self(
-            NonNull::new(ptr).expect("expected a valid pointer,got a null pointer instead"),
+            ptr, //NonNull::new(ptr).expect("expected a valid pointer,got a null pointer instead"),
             PhantomData::default(),
         );
     }
 
+    pub unsafe fn as_ptr(&self) -> *mut u8 {
+        self.0.as_ptr() as *mut u8
+    }
+
     pub unsafe fn get(&self, type_info: &TypeInfo, index: usize) -> *mut u8 {
-        self.0.as_ptr().add(type_info.layout.size() * index)
+        self.as_ptr().add(type_info.layout.size() * index)
     }
 
     pub unsafe fn set(&mut self, type_info: &TypeInfo, index: usize, data: *mut u8) -> () {
-        let dst = self.0.as_ptr().add(type_info.layout.size() * index);
+        let dst = self.as_ptr().add(type_info.layout.size() * index);
 
         ptr::copy_nonoverlapping(data, dst, type_info.layout.size());
     }
 
-    pub unsafe fn grow(&mut self, layout: &Layout, old_size: usize, new_size: usize) -> () {
+    pub unsafe fn grow(
+        &mut self,
+        layout: &Layout,
+        old_size: usize,
+        new_size: usize,
+        allocator: &A,
+    ) -> () {
         self.0 = {
             let old_layout = Layout::from_size_align(layout.size() * old_size, layout.align())
                 .expect("way to many components");
-            let ptr = realloc(self.0.as_ptr(), old_layout, new_size * layout.size());
+            //let ptr = realloc(self.0.as_ptr(), old_layout, new_size * layout.size());
+            let new_layout = Layout::from_size_align(new_size * layout.size(), layout.align())
+                .expect("failed to grow component storage"); //let ptr = self.0.as_ptr() as NonNull<[u8]>;
+                                                             //self.0.as_ptr() as [u8];
+            let ptr = allocator
+                .grow(self.0, old_layout, new_layout)
+                .unwrap()
+                .as_ptr() as *mut u8;
 
             NonNull::new(ptr).expect("expected a valid pointer,got a null pointer instead")
         };
@@ -306,11 +336,12 @@ where
     pub unsafe fn as_slice(&mut self, size: usize) -> &[*mut u8] {
         let refs = &self.0.as_ptr();
         let ptr = refs as *const *mut u8;
-        return std::slice::from_raw_parts(ptr, size);
+        return core::slice::from_raw_parts(ptr, size);
     }
 
-    pub unsafe fn dealloc(self, layout: &Layout) -> () {
-        dealloc(self.0.as_ptr(), *layout);
+    pub unsafe fn dealloc(self, layout: &Layout, allocator: &A) -> () {
+        //dealloc(self.0.as_ptr(), *layout);
+        allocator.deallocate(self.0, layout.clone());
     }
 }
 
@@ -335,9 +366,9 @@ where
         return self.archetypes.contains_key(types);
     }
 
-    pub fn add(&mut self, types: &[TypeId], type_info: &[TypeInfo]) -> () {
+    pub fn add(&mut self, types: &[TypeId], type_info: &[TypeInfo], allocator: A) -> () {
         self.archetypes
-            .insert(types.into(), Archetype::new(types, type_info));
+            .insert(types.into(), Archetype::new(types, type_info, allocator));
     }
 
     pub fn remove(&mut self, types: &[TypeId]) -> () {
@@ -400,6 +431,7 @@ mod tests {
         any::TypeId,
         assert_eq,
         mem::{align_of, size_of},
+        vec::Vec,
     };
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -420,7 +452,7 @@ mod tests {
             TypeInfo::new::<f64>(),
             TypeInfo::new::<TestComponent>(),
         ];
-        let archetype = Archetype::<Global>::new(&type_ids, &type_infos);
+        let archetype = Archetype::<Global>::new(&type_ids, &type_infos, Global);
         assert_eq!(*archetype.type_ids, type_ids);
         assert!(archetype.types.contains_key(&type_ids[0]));
         assert!(archetype.types.contains_key(&type_ids[1]));
@@ -439,7 +471,7 @@ mod tests {
             TypeInfo::new::<u64>(),
             TypeInfo::new::<TestComponent>(),
         ];
-        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos);
+        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos, Global);
 
         let mut test_data = (3u32, 2u64, TestComponent { a: 1, b: 346 });
         let entity = Entity(3);
@@ -451,10 +483,6 @@ mod tests {
         let t_u64 = unsafe { *(archetype.data[1].get(&type_infos[1], 0) as *mut u64) };
         let test_component =
             unsafe { *(archetype.data[2].get(&type_infos[2], 0) as *mut TestComponent) };
-
-        dbg!(t_u32);
-        dbg!(t_u64);
-        dbg!(test_component);
 
         assert_eq!(test_data.0, t_u32);
         assert_eq!(test_data.1, t_u64);
@@ -474,7 +502,7 @@ mod tests {
             TypeInfo::new::<u64>(),
             TypeInfo::new::<TestComponent>(),
         ];
-        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos);
+        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos, Global);
 
         let mut test_data = (3u32, 2u64, TestComponent { a: 1, b: 346 });
         let entity = Entity(3);
@@ -508,7 +536,7 @@ mod tests {
             TypeInfo::new::<u64>(),
             TypeInfo::new::<TestComponent>(),
         ];
-        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos);
+        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos, Global);
 
         let mut test_data = (3u32, 2u64, TestComponent { a: 1, b: 346 });
         let entity = Entity(3);
@@ -550,7 +578,7 @@ mod tests {
     fn archetype_grow() {
         let type_ids = [];
         let type_infos = [];
-        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos);
+        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos, Global);
         for _ in 0..10 {
             unsafe { archetype.grow(archetype.capacity * 2) };
         }
@@ -568,7 +596,7 @@ mod tests {
             TypeInfo::new::<u64>(),
             TypeInfo::new::<TestComponent>(),
         ];
-        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos);
+        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos, Global);
 
         for i in 0..12 {
             let entity = Entity(i);
@@ -592,7 +620,7 @@ mod tests {
             TypeInfo::new::<u64>(),
             TypeInfo::new::<TestComponent>(),
         ];
-        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos);
+        let mut archetype = Archetype::<Global>::new(&type_ids, &type_infos, Global);
         let mut data = (TestComponent { a: 3, b: 8 },);
 
         let entity = Entity(1);
@@ -604,7 +632,7 @@ mod tests {
     fn component_data_set() {
         let type_info = TypeInfo::new::<TestComponent>();
         let layout = type_info.layout;
-        let mut data = unsafe { ComponentData::<Global>::new(layout, 5) };
+        let mut data = unsafe { ComponentData::<Global>::new(layout, 5, &Global) };
         let mut test_components = Vec::new();
         for i in 0..5 {
             let component = TestComponent {
@@ -628,7 +656,7 @@ mod tests {
                 5 * size_of::<TestComponent>(),
                 align_of::<TestComponent>(),
             );
-            data.dealloc(&layout)
+            data.dealloc(&layout, &Global)
         }
     }
 
@@ -636,10 +664,10 @@ mod tests {
     fn component_data_get() {
         let type_info = TypeInfo::new::<TestComponent>();
         let layout = type_info.layout;
-        let mut data = unsafe { ComponentData::<Global>::new(layout, 1) };
+        let mut data = unsafe { ComponentData::<Global>::new(layout, 1, &Global) };
         let length = 2;
         let new_size = layout.size() * length;
-        unsafe { data.grow(&layout, 1, new_size) };
+        unsafe { data.grow(&layout, 1, new_size, &Global) };
         let test_component = TestComponent { a: 12, b: 634 };
         let ptr = &test_component as *const _ as *mut u8;
         unsafe { data.set(&type_info, 0, ptr) };
@@ -660,7 +688,7 @@ mod tests {
                 new_size * size_of::<TestComponent>(),
                 align_of::<TestComponent>(),
             );
-            data.dealloc(&layout)
+            data.dealloc(&layout, &Global)
         }
     }
 
@@ -668,10 +696,10 @@ mod tests {
     fn component_data_with_small_types() {
         let type_info = TypeInfo::new::<u32>();
         let layout = type_info.layout;
-        let mut data = unsafe { ComponentData::<Global>::new(layout, 1) };
+        let mut data = unsafe { ComponentData::<Global>::new(layout, 1, &Global) };
         let length = 2;
         let new_size = layout.size() * length;
-        unsafe { data.grow(&layout, 1, new_size) };
+        unsafe { data.grow(&layout, 1, new_size, &Global) };
         let test_component = 125u32;
         let ptr = &test_component as *const _ as *mut u8;
         unsafe { data.set(&type_info, 0, ptr) };
@@ -690,7 +718,7 @@ mod tests {
         unsafe {
             let layout =
                 Layout::from_size_align_unchecked(new_size * size_of::<u32>(), align_of::<u32>());
-            data.dealloc(&layout)
+            data.dealloc(&layout, &Global)
         };
     }
 
@@ -698,19 +726,19 @@ mod tests {
     fn component_data_grow() {
         let type_info = TypeInfo::new::<u32>();
         let layout = type_info.layout;
-        let mut data = unsafe { ComponentData::<Global>::new(layout, 1) };
+        let mut data = unsafe { ComponentData::<Global>::new(layout, 1, &Global) };
         let mut old_capacity;
         let mut capacity = 1;
         for _ in 0..12 {
             old_capacity = capacity;
             capacity *= 2;
-            unsafe { data.grow(&layout, old_capacity, capacity) };
+            unsafe { data.grow(&layout, old_capacity, capacity, &Global) };
         }
 
         unsafe {
             let layout =
                 Layout::from_size_align_unchecked(capacity * size_of::<u32>(), align_of::<u32>());
-            data.dealloc(&layout)
+            data.dealloc(&layout, &Global)
         }
     }
 }

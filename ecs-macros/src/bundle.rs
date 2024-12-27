@@ -32,9 +32,9 @@ fn impl_struct(data: &DataStruct, item: &DeriveInput) -> TokenStream {
                 ])
             }
 
-            fn type_ids() -> Box<[std::any::TypeId]> {
+            fn type_ids() -> Box<[core::any::TypeId]> {
                 Box::new([
-                    #(std::any::TypeId::of::<#types>()),*
+                    #(core::any::TypeId::of::<#types>()),*
                 ])
             }
 

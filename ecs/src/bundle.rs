@@ -1,4 +1,5 @@
-use std::any::TypeId;
+use alloc::boxed::Box;
+use core::any::TypeId;
 
 use crate::archetype::TypeInfo;
 

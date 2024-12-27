@@ -1,5 +1,6 @@
 use crate::{archetype::Archetype, bundle::Bundle};
-use std::{alloc::Allocator, marker::PhantomData};
+use alloc::boxed::Box;
+use core::{alloc::Allocator, marker::PhantomData};
 
 pub struct Query<'a, T, A>
 where
@@ -83,10 +84,10 @@ where
     }
 }
 
-impl<'a, T,A> Iterator for QueryMut<'a, T,A>
+impl<'a, T, A> Iterator for QueryMut<'a, T, A>
 where
     T: Bundle<'a> + 'a,
-    A: Allocator
+    A: Allocator,
 {
     type Item = T::TargetMut;
     fn next(&mut self) -> Option<Self::Item> {

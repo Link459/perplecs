@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::alloc::Allocator;
 
 use rustc_hash::FxHashSet;
@@ -16,16 +17,28 @@ where
     archetypes: ArchetypeSet<A>,
     entities: FxHashSet<Entity>,
     next_entity: u64,
+    allocator: A,
 }
 
 impl<A> World<A>
 where
-    A: Allocator,
+    A: Allocator + Clone,
 {
-    pub fn new() -> Self {
+    #[cfg(feature = "std")]
+    pub fn new() -> World<std::alloc::Global> {
+        World {
+            archetypes: ArchetypeSet::new(),
+            entities: FxHashSet::default(),
+            allocator: std::alloc::Global,
+            next_entity: 0,
+        }
+    }
+
+    pub fn new_in(allocator: A) -> Self {
         Self {
             archetypes: ArchetypeSet::new(),
             entities: FxHashSet::default(),
+            allocator,
             next_entity: 0,
         }
     }
@@ -42,9 +55,9 @@ where
         self.archetypes.iter_mut().for_each(|x| x.destroy(entity));
     }
 
-    pub fn add<'a, T>(&mut self, entity: Entity, mut data: T) -> ()
+    pub fn add<'b, T>(&mut self, entity: Entity, mut data: T) -> ()
     where
-        T: Bundle<'a>,
+        T: Bundle<'b>,
     {
         //unoptimal but it works
         let type_ids = T::type_ids();
@@ -57,7 +70,8 @@ where
                 let archetype = self.archetypes.get_by_entity_mut(entity);
                 if archetype.is_none() {
                     if !self.archetypes.has(&type_ids) {
-                        self.archetypes.add(&type_ids, &type_infos);
+                        self.archetypes
+                            .add(&type_ids, &type_infos, self.allocator.clone());
 
                         let archetype = self.archetypes.get_mut(&type_ids).unwrap();
 
@@ -89,7 +103,8 @@ where
                 ]
                 .concat();
 
-                self.archetypes.add(&new_type_ids, &new_type_infos);
+                self.archetypes
+                    .add(&new_type_ids, &new_type_infos, self.allocator.clone());
                 let new_archetype = self.archetypes.get_mut(&new_type_ids).unwrap();
                 new_archetype
             }
@@ -101,9 +116,9 @@ where
         };
     }
 
-    pub fn remove<'a, T>(&mut self, entity: Entity) -> Option<()>
+    pub fn remove<'b, T>(&mut self, entity: Entity) -> Option<()>
     where
-        T: Bundle<'a>,
+        T: Bundle<'b>,
     {
         let type_ids = T::type_ids();
         let rest;
@@ -118,7 +133,8 @@ where
             .collect::<Vec<_>>();
 
         if !self.archetypes.has(&new_type_ids) {
-            self.archetypes.add(&new_type_ids, &new_type_info);
+            self.archetypes
+                .add(&new_type_ids, &new_type_info, self.allocator.clone());
         }
 
         let archetype = self.archetypes.get_mut(&type_ids).unwrap();
@@ -129,9 +145,9 @@ where
         return Some(());
     }
 
-    pub fn get<'a, T>(&self, entity: Entity) -> Option<T::Target>
+    pub fn get<'b, T>(&self, entity: Entity) -> Option<T::Target>
     where
-        T: 'static + Bundle<'a>,
+        T: 'static + Bundle<'b>,
     {
         let archetype = self.archetypes.get_by_entity(entity)?;
         let data = unsafe { archetype.get(entity, &T::type_ids())? };
@@ -139,18 +155,18 @@ where
         //return Some(unsafe { &*(t[0] as *mut T) });
     }
 
-    pub fn get_mut<'a, T>(&mut self, entity: Entity) -> Option<T::TargetMut>
+    pub fn get_mut<'b, T>(&mut self, entity: Entity) -> Option<T::TargetMut>
     where
-        T: 'static + Bundle<'a>,
+        T: 'static + Bundle<'b>,
     {
         let archetype = self.archetypes.get_by_entity(entity)?;
         let data = unsafe { archetype.get(entity, &T::type_ids())? };
         return Some(unsafe { T::from_ptr_mut(&data) });
     }
 
-    pub fn has<'a, T>(&self, entity: Entity) -> bool
+    pub fn has<'b, T>(&self, entity: Entity) -> bool
     where
-        T: Bundle<'a>,
+        T: Bundle<'b>,
     {
         if let Some(archetype) = self.archetypes.get(&T::type_ids()) {
             return archetype.has(entity);
@@ -189,6 +205,7 @@ mod test {
     use std::alloc::Global;
     use std::assert_eq;
     use std::collections::HashSet;
+    use std::vec::Vec;
 
     type World = super::World<Global>;
 
